@@ -1,0 +1,23 @@
+{
+	"$schema": "https://raw.githubusercontent.com/untrustedmodders/plugify/refs/heads/main/schemas/plugin.schema.json",
+	"version": "${PERM_CONNECTOR_VERSION}",
+	"name": "perm_connector",
+	"description": "Links CS2 players (s2sdk) to users of the official 'permissions' plugin. Requests permissions::LoadUser for every connected, authorised human player (from the s2sdk OnClientAuthenticated event and from a once-per-second reconcile, which also covers late plugin load and the fact that OnClientAuthenticated does not reliably fire on a real server), logs OnUserLoaded per slot, removes the user from the core again on disconnect (DeleteUser - the core has no unload API) and triggers the one-time server group load (LoadGroups) so a storage plugin can populate groups. Adds the live-inspection console commands 'perm_status' and 'perm_cookie'.",
+	"author": "Pisex, ported to Plugify",
+	"website": "https://github.com/untrustedmodders/plugify",
+	"license": "GPL-3.0",
+	"entry": "bin/perm_connector",
+	"platforms": [],
+	"language": "cpp",
+	"dependencies": [
+		{
+			"name": "s2sdk",
+			"constraints": ">=2.18.2"
+		},
+		{
+			"name": "permissions",
+			"constraints": ">=1.3.1"
+		}
+	],
+	"methods": []
+}
