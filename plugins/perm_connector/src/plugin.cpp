@@ -190,6 +190,8 @@ private:
 	void EnsureGroupsLoaded();
 	void RequestLoad(int32_t playerSlot, uint64_t steamid64);
 	void ClearSlot(int32_t playerSlot, std::string_view reason);
+	// Slot other than `playerSlot` that still tracks `steamid64` with a live load request, or -1.
+	int32_t FindTrackingSlot(uint64_t steamid64, int32_t playerSlot) const;
 	// SteamID64 of the player in the slot: live s2sdk query when possible, else the tracked one.
 	uint64_t ResolveSlotSteamId(int32_t playerSlot) const;
 	int64_t RequesterId() const { return static_cast<int64_t>(GetId()); }
@@ -324,8 +326,11 @@ plg::PluginResult PermConnectorPlugin::OnPluginStart() {
 	try {
 		std::string error;
 		if (!BindingsAvailable(error)) {
-			LogError(error);
-			return plg::PluginResult(error, plg::PluginCode::Failed);
+			// Fail soft: a Failed result from OnPluginStart stops every Plugify plugin on the
+			// server (the game keeps running with no plugins at all), so a missing export leaves
+			// this plugin inactive instead. Nothing is registered and the reconcile stays off.
+			LogError(error + " - perm_connector stays inactive");
+			return {};
 		}
 
 		// No client queries here - before a map is loaded they crash inside s2sdk. The
@@ -372,7 +377,8 @@ plg::PluginResult PermConnectorPlugin::OnPluginStart() {
 				"); 'perm_status' and 'perm_cookie' registered");
 		return {};
 	} catch (const std::exception& ex) {
-		// Fail soft: Only genuinely missing bindings take the plugin down (checked above).
+		// Fail soft: a failure after the binding check leaves the plugin inert (or with the
+		// listeners it managed to register, which OnPluginEnd removes) - never the pipeline.
 		LogError(std::string("perm_connector: OnPluginStart failed: ") + ex.what());
 	} catch (...) {
 		LogError("perm_connector: OnPluginStart failed with an unknown exception");
@@ -543,10 +549,12 @@ void PermConnectorPlugin::RequestLoad(int32_t playerSlot, uint64_t steamid64) {
 
 	if (slot.steamid != 0 && slot.steamid != steamid64) {
 		// The slot changed hands without a disconnect event (rare; also covers a request that
-		// never completed): start over for the newcomer.
+		// never completed): release the previous user from the permissions core first, then start
+		// over for the newcomer - a plain reset would leave the old user in the core as "Online"
+		// until the process ends.
 		LogInfo("perm_connector: slot " + std::to_string(playerSlot) + " now holds user " + std::to_string(steamid64) +
 				" (was " + std::to_string(slot.steamid) + ") - treating it as a new connection");
-		slot = SlotState{};
+		ClearSlot(playerSlot, "slot reused");
 	}
 
 	if (slot.requested && slot.steamid == steamid64) {
@@ -600,6 +608,19 @@ void PermConnectorPlugin::RequestLoad(int32_t playerSlot, uint64_t steamid64) {
 	}
 }
 
+int32_t PermConnectorPlugin::FindTrackingSlot(uint64_t steamid64, int32_t playerSlot) const {
+	for (int32_t slot = 0; slot < kMaxSlots; ++slot) {
+		if (slot == playerSlot) {
+			continue;
+		}
+		const SlotState& state = m_slots[static_cast<std::size_t>(slot)];
+		if (state.requested && state.steamid == steamid64) {
+			return slot;
+		}
+	}
+	return -1;
+}
+
 void PermConnectorPlugin::ClearSlot(int32_t playerSlot, std::string_view reason) {
 	SlotState& slot = m_slots[playerSlot];
 	const uint64_t steamid64 = slot.steamid;
@@ -618,6 +639,18 @@ void PermConnectorPlugin::ClearSlot(int32_t playerSlot, std::string_view reason)
 	// again. Users that are merely loaded "offline" by someone else are left alone.
 	const permissions::PlayerState state = permissions::UserExists(steamid64);
 	if (state == permissions::PlayerState::Online) {
+		// The player may have reconnected on another slot before this slot was cleared (the
+		// missed-event paths below and in RequestLoad exist for exactly that). The user in the core
+		// then belongs to the other slot: deleting it would silently strip that connected player of
+		// groups, cookies and immunity until they reconnect, and nothing would re-load it - the
+		// other slot already reports its request as done. DeleteUser is keyed by steamid, so the
+		// slot that is going away must not release a user another slot still holds.
+		const int32_t other = FindTrackingSlot(steamid64, playerSlot);
+		if (other >= 0) {
+			LogInfo("perm_connector: released " + where + " - user " + std::to_string(steamid64) +
+					" is still tracked on slot " + std::to_string(other) + "; leaving it in the permissions core");
+			return;
+		}
 		const permissions::Status status = permissions::DeleteUser(RequesterId(), steamid64);
 		if (status == permissions::Status::Success) {
 			LogInfo("perm_connector: released " + where + " - user removed from the permissions core");

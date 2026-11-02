@@ -6,7 +6,9 @@ Original plugin (not a port).
 
 ## Requirements
 - [Plugify](https://github.com/untrustedmodders/plugify) with [s2sdk](https://github.com/untrustedmodders/plugify-plugin-s2sdk)
-- Plugify dependencies: s2sdk, permissions
+- Plugin version: 1.0.2
+- Plugify dependencies: s2sdk (>=2.18.2), permissions (>=1.3.1)
+- Self-contained s2sdk integration: uses s2sdk directly, without the pisexcompat library.
 
 ## Installation
 Download `perm_connector-1.0.2.zip` from Releases and extract it into `game/csgo/`.
